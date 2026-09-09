@@ -47,7 +47,7 @@ install_build_dependencies() {
     $sudo_cmd apt-get update -qq
     # Tooling plus the runtime-library set the bundled closure is sourced from.
     $sudo_cmd apt-get install -y --no-install-recommends \
-        build-essential dpkg-dev gnupg gpgv patchelf file binutils \
+        build-essential dpkg-dev gnupg gpgv patchelf file binutils desktop-file-utils \
         curl ca-certificates xz-utils python3 \
         libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 \
         libcairo2 libcups2t64 libdbus-1-3 libdrm2 libexpat1 libgbm1 \
@@ -338,6 +338,7 @@ pack_appimage() {
     info "Packing AppImage: $output"
     ARCH=x86_64 VERSION="$version" APPIMAGE_EXTRACT_AND_RUN=1 \
         "$tool" --no-appstream "$appdir" "$output" >&2
+    [ -f "$output" ] || error "appimagetool produced no output (exit code lost through APPIMAGE_EXTRACT_AND_RUN)"
     chmod 0755 "$output"
     printf '%s\n' "$output"
 }
