@@ -192,7 +192,20 @@ copy_dynamic_loader() {
     loader="$(ldd /bin/true | awk '/ld-linux/ {print $1; exit}')"
     [ -n "$loader" ] || error "Could not locate the host dynamic loader"
     cp -L --preserve=mode,timestamps "$loader" "$runtime_lib/$PORTABLE_INTERP_NAME"
-    info "Bundled dynamic loader: $loader"
+
+    # glibc 2.34+ folds these libraries into libc, so ldd on the build host
+    # may omit compatibility stubs that still exist and are loaded on Debian
+    # 10. Keep every split glibc component from the same host build.
+    local component source
+    for component in \
+        libpthread.so.0 librt.so.1 libdl.so.2 libutil.so.1 libanl.so.1 \
+        libresolv.so.2 libnss_dns.so.2 libnss_files.so.2 libnss_hesiod.so.2; do
+        source="$(ldconfig -p | awk -v name="$component" '$1 == name {print $NF; exit}')"
+        [ -n "$source" ] || continue
+        cp -L --preserve=mode,timestamps "$source" "$runtime_lib/$component"
+    done
+
+    info "Bundled dynamic loader and glibc compatibility components from: $loader"
 }
 
 rewrite_elf_interpreters() {
@@ -319,7 +332,7 @@ audit_bundled_runtime() {
     local appdir="$1"
     local runtime_lib="$appdir/$RUNTIME_LIB_REL"
     local essential
-    for essential in "$PORTABLE_INTERP_NAME" libc.so.6 libstdc++.so.6 libm.so.6; do
+    for essential in "$PORTABLE_INTERP_NAME" libc.so.6 libpthread.so.0 librt.so.1 libstdc++.so.6 libm.so.6; do
         [ -e "$runtime_lib/$essential" ] || error "Bundled runtime is missing $essential"
     done
 
