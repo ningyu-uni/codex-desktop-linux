@@ -132,11 +132,10 @@ ldd_missing_count() {
 }
 host_graphics_library() {
     case "$(basename "$1")" in
+        # Keep protocol/window-system libraries with bundled GTK. Only the
+        # driver-facing stack must remain host-provided.
         libGL.so.*|libEGL.so.*|libGLX.so.*|libOpenGL.so.*|libGLES*.so.*| \
-        libGLdispatch.so.*|libgbm.so.*|libdrm.so.*|libvulkan.so.*|libva.so.*| \
-        libwayland-*.so.*|libX11.so.*|libX11-xcb.so.*|libXext.so.*| \
-        libXfixes.so.*|libXdamage.so.*|libXrandr.so.*|libXi.so.*| \
-        libxcb*.so.*|libxkbcommon*.so.*)
+        libGLdispatch.so.*|libgbm.so.*|libdrm.so.*|libvulkan.so.*|libva.so.*)
             return 0
             ;;
         *)
