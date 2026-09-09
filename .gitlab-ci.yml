@@ -1,0 +1,18 @@
+# Portable x86_64 AppImage (Debian 10 / glibc 2.28 compatible).
+# Requires a docker-based x86_64 runner; GitLab shared linux runners qualify.
+# The whole pipeline lives in scripts/build-appimage-portable.sh so that this
+# file and .github/workflows/appimage-portable.yml stay identical in behavior.
+portable-appimage:
+  stage: build
+  image: ubuntu:24.04
+  timeout: 1h
+  variables:
+    DEBIAN_FRONTEND: noninteractive
+  script:
+    - bash scripts/build-appimage-portable.sh
+  artifacts:
+    name: portable-appimage-x86_64
+    paths:
+      - dist/*.AppImage
+      - dist/*.sha256
+    expire_in: 14 days
