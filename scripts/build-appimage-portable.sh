@@ -290,8 +290,13 @@ text = launcher.read_text()
 runtime = 'LD_LIBRARY_PATH="${CODEX_PORTABLE_RUNTIME_LIB}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"'
 
 exec_line = '    exec "$CHATGPT_BINARY" "${ELECTRON_ARGS[@]}" "${ORIGINAL_ARGS[@]}"'
-gpu_guard = '''    if [ "${CODEX_PORTABLE_ENABLE_GPU:-0}" != "1" ]; then
-        ELECTRON_ARGS+=("--disable-gpu")
+gpu_guard = '''    if [ "${CODEX_PORTABLE_DISABLE_GPU:-0}" != "1" ]; then
+        ELECTRON_ARGS+=(
+            "--use-gl=angle"
+            "--use-angle=vulkan"
+            "--enable-features=Vulkan,DefaultANGLEVulkan,VulkanFromANGLE"
+            "--ignore-gpu-blocklist"
+        )
     fi
 
 '''
@@ -301,7 +306,7 @@ if text.count(exec_line) != 1:
 text = text.replace(exec_line, exec_replacement, 1)
 
 after_exit_line = '\n"$CHATGPT_BINARY" "${ELECTRON_ARGS[@]}" "${ORIGINAL_ARGS[@]}"'
-after_exit_replacement = f'\nenv {runtime} "$CHATGPT_BINARY" "${{ELECTRON_ARGS[@]}}" "${{ORIGINAL_ARGS[@]}}"'
+after_exit_replacement = f'\n{gpu_guard}env {runtime} "$CHATGPT_BINARY" "${{ELECTRON_ARGS[@]}}" "${{ORIGINAL_ARGS[@]}}"'
 if text.count(after_exit_line) != 1:
     raise SystemExit(f"expected one after-exit ChatGPT launch, found {text.count(after_exit_line)}")
 text = text.replace(after_exit_line, after_exit_replacement, 1)
