@@ -9,12 +9,13 @@ set -Eeuo pipefail
 # therefore bundles the payload's complete shared-library closure — including
 # glibc with its dynamic loader, libstdc++, GTK, NSS, and the graphics and
 # audio stack, sourced from the x86_64 build host (GitHub's ubuntu-24.04
-# runner) — inside the AppImage. Every ELF gets PT_INTERP redirected to a
-# fixed path that AppRun points at the bundled loader on each launch (AppImage
-# mount paths change per run, so the link must be recreated then), and RPATH
-# entries are repointed at the bundled library directory. Chromium re-executes
-# its own binary for child processes, so every executable in the image — not
-# just the main one — needs the redirected interpreter.
+# runner) — inside the AppImage. Every executable gets PT_INTERP redirected to
+# a fixed short path that AppRun points at the bundled loader on each launch
+# (AppImage mount paths change per run, so the link must be recreated then).
+# Chromium re-executes its own binary for child processes, so every executable
+# in the image — not just the main one — needs the redirected interpreter.
+# Bundled libraries are found through LD_LIBRARY_PATH exported by AppRun; the
+# payload's own RPATH is left untouched so its bundled libraries keep winning.
 #
 # The result runs on hosts with glibc >= 2.28 (for example Debian 10, kernel
 # 4.19) without using the host glibc. Residual risks of the bundled-glibc
@@ -27,9 +28,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 . "$REPO_DIR/scripts/lib/package-common.sh"
 
-PORTABLE_LOADER_DIR="/tmp/.codex-desktop-portable-ld"
 PORTABLE_INTERP_NAME="ld-linux-x86-64.so.2"
-PORTABLE_INTERP="$PORTABLE_LOADER_DIR/$PORTABLE_INTERP_NAME"
+# Kept shorter than the stock interpreter path (/lib64/ld-linux-x86-64.so.2,
+# 27 bytes) so patchelf rewrites PT_INTERP in place instead of shifting
+# segments, which corrupts large PIE binaries such as the Chromium payload.
+PORTABLE_INTERP="/tmp/.cdx-portable-ld.so"
 RUNTIME_LIB_REL="opt/codex-desktop/.codex-linux/runtime/lib"
 APPIMAGETOOL_URL="https://github.com/AppImage/appimagetool/releases/download/1.9.0/appimagetool-x86_64.AppImage"
 NODE_DIST_VERSION="v20.19.1"
@@ -172,35 +175,18 @@ copy_dynamic_loader() {
     info "Bundled dynamic loader: $loader"
 }
 
-rewrite_elf_metadata() {
+rewrite_elf_interpreters() {
     local appdir="$1"
-    local runtime_lib="$appdir/$RUNTIME_LIB_REL"
     local rewritten=0
     local f
     while IFS= read -r -d '' f; do
         is_dynamic_elf "$f" || continue
-        local new_rpath old_rpath
-        if [[ "$(realpath "$f")" == "$runtime_lib"/* ]]; then
-            new_rpath='$ORIGIN'
-        else
-            local rel
-            rel="$(python3 -c 'import os, sys
-print("$ORIGIN/" + os.path.relpath(sys.argv[1], os.path.dirname(sys.argv[2])))' \
-                "$runtime_lib" "$f")"
-            old_rpath="$(patchelf --print-rpath "$f" 2>/dev/null || true)"
-            if [ -n "$old_rpath" ]; then
-                new_rpath="$rel:$old_rpath"
-            else
-                new_rpath="$rel"
-            fi
-        fi
-        patchelf --set-rpath "$new_rpath" "$f"
         if has_interpreter "$f"; then
             patchelf --set-interpreter "$PORTABLE_INTERP" "$f"
+            rewritten=$((rewritten + 1))
         fi
-        rewritten=$((rewritten + 1))
     done < <(find "$appdir" -type f -print0)
-    info "Rewrote $rewritten ELF files (RPATH + interpreter)"
+    info "Redirected $rewritten executable interpreters to $PORTABLE_INTERP"
 }
 
 install_portable_apprun() {
@@ -228,28 +214,27 @@ resolve_appdir() {
 APPDIR="${APPDIR:-$(resolve_appdir)}"
 export APPDIR
 
-# The payload runs on the AppImage-internal glibc. Every ELF inside the image
-# has PT_INTERP pointed at a fixed path; this symlink makes that path resolve
-# to the loader in the current mount. It is recreated on each launch because
-# AppImage mount points differ per run, and every Chromium child process that
-# re-executes the main binary resolves it again.
+# The payload runs on the AppImage-internal glibc. Every executable inside
+# the image has PT_INTERP pointed at the fixed LOADER_LINK path; the symlink
+# below makes that path resolve to the loader in the current mount. It is
+# recreated on each launch because AppImage mount points differ per run, and
+# every Chromium child process that re-executes the main binary resolves it
+# again. Bundled libraries are located through LD_LIBRARY_PATH, which applies
+# to every object uniformly; the payload's own RPATH still wins for the
+# libraries it ships itself because those SONAMEs are never bundled.
 RUNTIME_LIB="$APPDIR/opt/codex-desktop/.codex-linux/runtime/lib"
-LOADER_DIR="/tmp/.codex-desktop-portable-ld"
+LOADER_LINK="/tmp/.cdx-portable-ld.so"
 if [ -x "$RUNTIME_LIB/ld-linux-x86-64.so.2" ]; then
-    if ! mkdir -m 0755 -p "$LOADER_DIR" 2>/dev/null; then
-        printf 'ChatGPT Community: cannot create %s; remove it and retry.\n' "$LOADER_DIR" >&2
-        exit 1
-    fi
-    ln -sfn "$RUNTIME_LIB/ld-linux-x86-64.so.2" "$LOADER_DIR/ld-linux-x86-64.so.2" 2>/dev/null || {
-        printf 'ChatGPT Community: cannot link the portable loader in %s.\n' "$LOADER_DIR" >&2
+    ln -sfn "$RUNTIME_LIB/ld-linux-x86-64.so.2" "$LOADER_LINK" 2>/dev/null || {
+        printf 'ChatGPT Community: cannot create the portable loader link %s; remove it and retry.\n' "$LOADER_LINK" >&2
         exit 1
     }
-    resolved="$(readlink -f "$LOADER_DIR/ld-linux-x86-64.so.2")"
     expected="$(cd "$RUNTIME_LIB" && pwd)/ld-linux-x86-64.so.2"
-    if [ "$resolved" != "$expected" ]; then
-        printf 'ChatGPT Community: portable loader link mismatch in %s.\n' "$LOADER_DIR" >&2
+    if [ "$(readlink -f "$LOADER_LINK")" != "$expected" ]; then
+        printf 'ChatGPT Community: portable loader link mismatch at %s.\n' "$LOADER_LINK" >&2
         exit 1
     fi
+    export LD_LIBRARY_PATH="$RUNTIME_LIB${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 fi
 
 exec "$APPDIR/opt/codex-desktop/start.sh" "$@"
@@ -260,7 +245,6 @@ APPRUN_EOF
 
 install_loader_link() {
     local runtime_lib="$1"
-    mkdir -m 0755 -p "$PORTABLE_LOADER_DIR"
     ln -sfn "$runtime_lib/$PORTABLE_INTERP_NAME" "$PORTABLE_INTERP"
 }
 
@@ -351,8 +335,10 @@ smoke_test() {
     (cd "$workdir" && "$output" --appimage-extract >/dev/null)
     info "Smoke: AppRun --diagnose"
     "$workdir/squashfs-root/AppRun" --diagnose
-    info "Smoke: resolving dependencies through the baked RPATH (loader --list)"
-    "$PORTABLE_LOADER_DIR/$PORTABLE_INTERP_NAME" \
+
+    info "Smoke: resolving dependencies the way AppRun will (loader --list)"
+    local extracted_lib="$workdir/squashfs-root/$RUNTIME_LIB_REL"
+    LD_LIBRARY_PATH="$extracted_lib" "$extracted_lib/$PORTABLE_INTERP_NAME" \
         --list "$workdir/squashfs-root/opt/codex-desktop/ChatGPT" > "$workdir/loader-list.txt" 2>&1 || true
     grep -vE '^(linux-vdso|linux-gate)' "$workdir/loader-list.txt" | head -80 || true
     info "Smoke: launching the official binary through the bundled loader (--version)"
@@ -387,7 +373,7 @@ main() {
 
     bundle_library_closure "$appdir"
     copy_dynamic_loader "$appdir"
-    rewrite_elf_metadata "$appdir"
+    rewrite_elf_interpreters "$appdir"
     install_portable_apprun "$appdir"
     install_loader_link "$runtime_lib"
     audit_bundled_runtime "$appdir"
