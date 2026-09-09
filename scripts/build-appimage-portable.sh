@@ -219,9 +219,10 @@ export APPDIR
 # below makes that path resolve to the loader in the current mount. It is
 # recreated on each launch because AppImage mount points differ per run, and
 # every Chromium child process that re-executes the main binary resolves it
-# again. Bundled libraries are located through LD_LIBRARY_PATH, which applies
-# to every object uniformly; the payload's own RPATH still wins for the
-# libraries it ships itself because those SONAMEs are never bundled.
+# again. Do not export LD_LIBRARY_PATH here: AppRun and start.sh invoke host
+# utilities before launching ChatGPT, and a Debian 10 host loader must not
+# combine those utilities with this AppImage's newer libc. The generated
+# start.sh applies this path only to ChatGPT and its inherited child tree.
 RUNTIME_LIB="$APPDIR/opt/codex-desktop/.codex-linux/runtime/lib"
 LOADER_LINK="/tmp/.cdx-portable-ld.so"
 if [ -x "$RUNTIME_LIB/ld-linux-x86-64.so.2" ]; then
@@ -234,13 +235,43 @@ if [ -x "$RUNTIME_LIB/ld-linux-x86-64.so.2" ]; then
         printf 'ChatGPT Community: portable loader link mismatch at %s.\n' "$LOADER_LINK" >&2
         exit 1
     fi
-    export LD_LIBRARY_PATH="$RUNTIME_LIB${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    export CODEX_PORTABLE_RUNTIME_LIB="$RUNTIME_LIB"
 fi
 
 exec "$APPDIR/opt/codex-desktop/start.sh" "$@"
 APPRUN_EOF
     chmod 0755 "$appdir/AppRun"
     info "Installed portable AppRun"
+}
+
+patch_staged_launcher() {
+    local appdir="$1"
+    local launcher="$appdir/opt/codex-desktop/start.sh"
+    [ -f "$launcher" ] || error "Missing staged launcher: $launcher"
+
+    python3 - "$launcher" <<'PY'
+import pathlib
+import sys
+
+launcher = pathlib.Path(sys.argv[1])
+text = launcher.read_text()
+runtime = 'LD_LIBRARY_PATH="${CODEX_PORTABLE_RUNTIME_LIB}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"'
+
+exec_line = '    exec "$CHATGPT_BINARY" "${ELECTRON_ARGS[@]}" "${ORIGINAL_ARGS[@]}"'
+exec_replacement = f'    exec env {runtime} "$CHATGPT_BINARY" "${{ELECTRON_ARGS[@]}}" "${{ORIGINAL_ARGS[@]}}"'
+if text.count(exec_line) != 1:
+    raise SystemExit(f"expected one direct ChatGPT exec, found {text.count(exec_line)}")
+text = text.replace(exec_line, exec_replacement, 1)
+
+after_exit_line = '\n"$CHATGPT_BINARY" "${ELECTRON_ARGS[@]}" "${ORIGINAL_ARGS[@]}"'
+after_exit_replacement = f'\nenv {runtime} "$CHATGPT_BINARY" "${{ELECTRON_ARGS[@]}}" "${{ORIGINAL_ARGS[@]}}"'
+if text.count(after_exit_line) != 1:
+    raise SystemExit(f"expected one after-exit ChatGPT launch, found {text.count(after_exit_line)}")
+text = text.replace(after_exit_line, after_exit_replacement, 1)
+
+launcher.write_text(text)
+PY
+    info "Scoped bundled LD_LIBRARY_PATH to ChatGPT launches"
 }
 
 install_loader_link() {
@@ -336,12 +367,12 @@ smoke_test() {
     info "Smoke: AppRun --diagnose"
     "$workdir/squashfs-root/AppRun" --diagnose
 
-    info "Smoke: resolving dependencies the way AppRun will (loader --list)"
+    info "Smoke: resolving dependencies through the bundled loader"
     local extracted_lib="$workdir/squashfs-root/$RUNTIME_LIB_REL"
-    LD_LIBRARY_PATH="$extracted_lib" "$extracted_lib/$PORTABLE_INTERP_NAME" \
+    env -u LD_LIBRARY_PATH "$extracted_lib/$PORTABLE_INTERP_NAME" \
+        --library-path "$extracted_lib" \
         --list "$workdir/squashfs-root/opt/codex-desktop/ChatGPT" > "$workdir/loader-list.txt" 2>&1 || true
     grep -vE '^(linux-vdso|linux-gate)' "$workdir/loader-list.txt" | head -80 || true
-    info "Smoke: launching the official binary through the bundled loader (--version)"
     if command -v strace >/dev/null 2>&1; then
         timeout 180 strace -f -e trace=execve,openat,access,statx \
             "$workdir/squashfs-root/AppRun" --version \
@@ -375,6 +406,7 @@ main() {
     copy_dynamic_loader "$appdir"
     rewrite_elf_interpreters "$appdir"
     install_portable_apprun "$appdir"
+    patch_staged_launcher "$appdir"
     install_loader_link "$runtime_lib"
     audit_bundled_runtime "$appdir"
 
