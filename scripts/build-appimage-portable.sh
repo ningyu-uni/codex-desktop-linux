@@ -48,7 +48,7 @@ install_build_dependencies() {
     # Tooling plus the runtime-library set the bundled closure is sourced from.
     $sudo_cmd apt-get install -y --no-install-recommends \
         build-essential dpkg-dev gnupg gpgv patchelf file binutils desktop-file-utils \
-        curl ca-certificates xz-utils python3 \
+        curl ca-certificates xz-utils python3 strace \
         libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 \
         libcairo2 libcups2t64 libdbus-1-3 libdrm2 libexpat1 libgbm1 \
         libgdk-pixbuf-2.0-0 libgl1 libglib2.0-0t64 libgtk-3-0t64 \
@@ -351,7 +351,17 @@ smoke_test() {
     (cd "$workdir" && "$output" --appimage-extract >/dev/null)
     info "Smoke: AppRun --diagnose"
     "$workdir/squashfs-root/AppRun" --diagnose
+    info "Smoke: resolving dependencies through the baked RPATH (loader --list)"
+    "$PORTABLE_LOADER_DIR/$PORTABLE_INTERP_NAME" \
+        --list "$workdir/squashfs-root/opt/codex-desktop/ChatGPT" > "$workdir/loader-list.txt" 2>&1 || true
+    grep -vE '^(linux-vdso|linux-gate)' "$workdir/loader-list.txt" | head -80 || true
     info "Smoke: launching the official binary through the bundled loader (--version)"
+    if command -v strace >/dev/null 2>&1; then
+        timeout 180 strace -f -e trace=execve,openat,access,statx \
+            "$workdir/squashfs-root/AppRun" --version \
+            > "$workdir/strace.txt" 2>&1 || true
+        tail -60 "$workdir/strace.txt" || true
+    fi
     timeout 180 "$workdir/squashfs-root/AppRun" --version
     rm -rf "$workdir"
 }
