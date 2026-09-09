@@ -109,6 +109,12 @@ has_interpreter() {
     readelf -l "$1" 2>/dev/null | grep -q 'Requesting program interpreter'
 }
 
+# Statically linked payload executables carry no .dynamic section; they need
+# neither RPATH nor interpreter rewrites and patchelf rejects them.
+is_dynamic_elf() {
+    is_elf "$1" && readelf -d "$1" 2>/dev/null | grep -q 'Dynamic section at offset'
+}
+
 ldd_resolved_paths() {
     LD_LIBRARY_PATH="$1" ldd "$2" 2>/dev/null | awk '
         $2 == "=>" && $3 ~ /^\// { print $3; next }
@@ -172,7 +178,7 @@ rewrite_elf_metadata() {
     local rewritten=0
     local f
     while IFS= read -r -d '' f; do
-        is_elf "$f" || continue
+        is_dynamic_elf "$f" || continue
         local new_rpath old_rpath
         if [[ "$(realpath "$f")" == "$runtime_lib"/* ]]; then
             new_rpath='$ORIGIN'
