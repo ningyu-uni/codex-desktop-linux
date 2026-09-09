@@ -41,7 +41,7 @@ jobs:
         with:
           name: portable-appimage-x86_64
           path: |
-            dist/*.AppImage
-            dist/*.sha256
+            dist/codex-desktop-*-portable*-x86_64.AppImage
+            dist/codex-desktop-*-portable*-x86_64.AppImage.sha256
           if-no-files-found: error
           retention-days: 14
