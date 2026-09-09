@@ -132,10 +132,11 @@ ldd_missing_count() {
 }
 host_graphics_library() {
     case "$(basename "$1")" in
-        # Keep protocol/window-system libraries with bundled GTK. Only the
-        # driver-facing stack must remain host-provided.
+        # Keep protocol/window-system libraries and the generic Mesa GBM/DRM
+        # loader with the bundled glibc. Only vendor-facing GL/Vulkan stacks
+        # remain host-provided so the host ICD and DRI driver can be selected.
         libGL.so.*|libEGL.so.*|libGLX.so.*|libOpenGL.so.*|libGLES*.so.*| \
-        libGLdispatch.so.*|libgbm.so.*|libdrm.so.*|libvulkan.so.*|libva.so.*)
+        libGLdispatch.so.*|libvulkan.so.*|libva.so.*)
             return 0
             ;;
         *)
