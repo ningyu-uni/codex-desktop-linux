@@ -258,7 +258,12 @@ text = launcher.read_text()
 runtime = 'LD_LIBRARY_PATH="${CODEX_PORTABLE_RUNTIME_LIB}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"'
 
 exec_line = '    exec "$CHATGPT_BINARY" "${ELECTRON_ARGS[@]}" "${ORIGINAL_ARGS[@]}"'
-exec_replacement = f'    exec env {runtime} "$CHATGPT_BINARY" "${{ELECTRON_ARGS[@]}}" "${{ORIGINAL_ARGS[@]}}"'
+gpu_guard = '''    if [ "${CODEX_PORTABLE_ENABLE_GPU:-0}" != "1" ]; then
+        ELECTRON_ARGS+=("--disable-gpu")
+    fi
+
+'''
+exec_replacement = f'{gpu_guard}    exec env {runtime} "$CHATGPT_BINARY" "${{ELECTRON_ARGS[@]}}" "${{ORIGINAL_ARGS[@]}}"'
 if text.count(exec_line) != 1:
     raise SystemExit(f"expected one direct ChatGPT exec, found {text.count(exec_line)}")
 text = text.replace(exec_line, exec_replacement, 1)
