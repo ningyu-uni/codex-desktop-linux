@@ -264,6 +264,17 @@ install_loader_link() {
     ln -sfn "$runtime_lib/$PORTABLE_INTERP_NAME" "$PORTABLE_INTERP"
 }
 
+# Payload components that are optional by design: the Qt shims are dlopen'd
+# only when a Qt runtime exists on the host (the official deb does not depend
+# on Qt either), and musl prebuild variants are never loaded on glibc hosts
+# because glibc counterparts ship in the same prebuilds tree.
+audit_exempt() {
+    case "$1" in
+        */libqt5_shim.so|*/libqt6_shim.so|*musl*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 audit_bundled_runtime() {
     local appdir="$1"
     local runtime_lib="$appdir/$RUNTIME_LIB_REL"
@@ -277,6 +288,9 @@ audit_bundled_runtime() {
     while IFS= read -r -d '' f; do
         is_elf "$f" || continue
         elf_count=$((elf_count + 1))
+        if audit_exempt "$f"; then
+            continue
+        fi
         if [ "$(ldd_missing_count "$runtime_lib" "$f")" -gt 0 ]; then
             missing_files=$((missing_files + 1))
             warn "Unresolved dependencies in: $f"
