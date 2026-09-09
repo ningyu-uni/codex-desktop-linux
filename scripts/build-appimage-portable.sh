@@ -6,16 +6,18 @@ set -Eeuo pipefail
 # The official ChatGPT Linux payload references GLIBC_2.35+ symbols, so the
 # host loader on Debian 10 cannot run it, and bundling ordinary libraries
 # cannot fix that: the dynamic loader itself is part of glibc. This builder
-# therefore bundles the payload's complete shared-library closure — including
-# glibc with its dynamic loader, libstdc++, GTK, NSS, and the graphics and
-# audio stack, sourced from the x86_64 build host (GitHub's ubuntu-24.04
-# runner) — inside the AppImage. Every executable gets PT_INTERP redirected to
-# a fixed short path that AppRun points at the bundled loader on each launch
-# (AppImage mount paths change per run, so the link must be recreated then).
+# therefore bundles the payload's complete application-library closure — including
+# glibc with its dynamic loader and libstdc++ — inside the AppImage. Mesa,
+# libdrm, GBM, EGL, GLX, X11, XCB, and Wayland remain host-provided: those
+# libraries must match the host kernel and graphics driver rather than the
+# Ubuntu build runner. Every executable gets PT_INTERP redirected to a fixed
+# short path that AppRun points at the bundled loader on each launch (AppImage
+# mount paths change per run, so the link must be recreated then).
 # Chromium re-executes its own binary for child processes, so every executable
 # in the image — not just the main one — needs the redirected interpreter.
-# Bundled libraries are found through LD_LIBRARY_PATH exported by AppRun; the
-# payload's own RPATH is left untouched so its bundled libraries keep winning.
+# Bundled libraries are found through the scoped LD_LIBRARY_PATH applied only
+# while launching ChatGPT; host utilities and host graphics libraries stay
+# outside that environment.
 #
 # The result runs on hosts with glibc >= 2.28 (for example Debian 10, kernel
 # 4.19) without using the host glibc. Residual risks of the bundled-glibc
@@ -128,6 +130,21 @@ ldd_resolved_paths() {
 ldd_missing_count() {
     LD_LIBRARY_PATH="$1" ldd "$2" 2>/dev/null | grep -cF 'not found' || true
 }
+host_graphics_library() {
+    case "$(basename "$1")" in
+        libGL.so.*|libEGL.so.*|libGLX.so.*|libOpenGL.so.*|libGLES*.so.*| \
+        libGLdispatch.so.*|libgbm.so.*|libdrm.so.*|libvulkan.so.*|libva.so.*| \
+        libwayland-*.so.*|libX11.so.*|libX11-xcb.so.*|libXext.so.*| \
+        libXfixes.so.*|libXdamage.so.*|libXrandr.so.*|libXi.so.*| \
+        libxcb*.so.*|libxkbcommon*.so.*)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 
 bundle_library_closure() {
     local appdir="$1"
@@ -155,6 +172,9 @@ bundle_library_closure() {
             case "$(basename "$dep")" in
                 "$PORTABLE_INTERP_NAME"|ld-linux*|linux-vdso*) continue ;;
             esac
+            # Mesa/DRM/desktop libraries must match the host kernel and GPU
+            # driver. The bundled glibc loader can resolve them from the host.
+            host_graphics_library "$dep" && continue
             target="$runtime_lib/$(basename "$dep")"
             [ -e "$target" ] && continue
             cp -L --preserve=mode,timestamps "$dep" "$target"
@@ -258,7 +278,7 @@ text = launcher.read_text()
 runtime = 'LD_LIBRARY_PATH="${CODEX_PORTABLE_RUNTIME_LIB}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"'
 
 exec_line = '    exec "$CHATGPT_BINARY" "${ELECTRON_ARGS[@]}" "${ORIGINAL_ARGS[@]}"'
-gpu_guard = '''    if [ "${CODEX_PORTABLE_ENABLE_GPU:-0}" != "1" ]; then
+gpu_guard = '''    if [ "${CODEX_PORTABLE_DISABLE_GPU:-0}" = "1" ]; then
         ELECTRON_ARGS+=("--disable-gpu")
     fi
 
