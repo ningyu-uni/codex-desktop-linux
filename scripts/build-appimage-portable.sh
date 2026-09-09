@@ -290,7 +290,7 @@ text = launcher.read_text()
 runtime = 'LD_LIBRARY_PATH="${CODEX_PORTABLE_RUNTIME_LIB}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"'
 
 exec_line = '    exec "$CHATGPT_BINARY" "${ELECTRON_ARGS[@]}" "${ORIGINAL_ARGS[@]}"'
-gpu_guard = '''    if [ "${CODEX_PORTABLE_DISABLE_GPU:-0}" = "1" ]; then
+gpu_guard = '''    if [ "${CODEX_PORTABLE_ENABLE_GPU:-0}" != "1" ]; then
         ELECTRON_ARGS+=("--disable-gpu")
     fi
 
